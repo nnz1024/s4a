@@ -1,0 +1,943 @@
+\documentclass[10pt,oneside,a4paper]{article}
+\usepackage{cmap} % Copy-paste из PDF без проблем с кодировкой
+\usepackage[utf8]{inputenc}
+\usepackage[english,russian]{babel} % Русские переносы и проч.
+\usepackage[pdftex]{graphicx,color}
+\usepackage[T1,T2A]{fontenc}
+\usepackage{indentfirst} % Отступ в первом абзаце главы 
+\usepackage{fancyvrb} % Продвинутые листинги и in-line commands
+% listings для данной ситуации, имхо, избыточен
+\usepackage{pdflscape}
+\usepackage[colorlinks,unicode,urlcolor=blue]{hyperref}
+% Заполняем поля PDF уже со включенной опцией unicode
+\hypersetup{pdftitle={systemd для администраторов},%
+pdfauthor={Lennart Poettering, Sergey Ptashnick}}
+% Небольшое сокращение
+\newcommand{\sectiona}[1]{\section*{#1}\addcontentsline{toc}{section}{#1}}
+% Настройка макета страницы
+\setlength{\hoffset}{-1.5cm}
+\addtolength{\textwidth}{2cm}
+\setlength{\voffset}{-1.5cm}
+\addtolength{\textheight}{2cm}
+% Настройка in-line commands
+\DefineShortVerb{\+}
+\VerbatimFootnotes
+% И листингов
+\definecolor{gray}{gray}{0.75}
+\fvset{frame=leftline,rulecolor=\color{gray},framerule=1mm}
+% Запрет висячих строк
+\clubpenalty=10000
+\widowpenalty=10000
+
+\begin{document}
+\sloppy
+\title{systemd для администраторов}
+\author{Lennart P\"{o}ttering (author)\\Sergey Ptashnick (russian translation)\\%
+\small Licensed under
+\href{http://creativecommons.org/licenses/by-sa/3.0/legalcode}{CC-BY-SA}}
+\maketitle
+\tableofcontents%\newpage
+\sectiona{Предисловие автора}
+Многие из вас, наверное, уже знают, что
+\href{http://www.freedesktop.org/wiki/Software/systemd}{systemd}~--- это
+новая система инициализации дистрибутива Fedora, начиная с
+Fedora~14\footnote{Прим. перев.: к сожалению, разработчики Fedora приняли
+решение оставить в Fedora~14 в качестве системы инициалиазции по умолчанию
+upstart, однако systemd все равно будет включен в этот релиз и может быть
+использован в качестве альтернативной системы инициализации}. Помимо Fedora,
+systemd также поддерживает и другие дистрибутивы, в частности,
+\href{http://en.opensuse.org/SDB:Systemd}{OpenSUSE}.
+systemd предоставляет администраторам целый ряд новых возможностей,
+значительно упрощающих процесс обслуживания системы. Эта статья является
+первой в серии публикаций, планируемых в ближайшие месяцы. В каждой из этих
+статей я попытаюсь рассказать об очередной новой возможности systemd.
+Большинство этих возможностей можно описать легко и просто, и подобные статьи
+должны быть интересны довольно широкой аудитории.  Однако, время от времени
+мы будем рассматривать ключевые новшества systemd, что может потребовать
+несколько более подробного изложения. 
+\begin{flushright}
+	Lennart P\"{o}ttering, 23 августа 2010
+\end{flushright}
+
+\section{Контроль процесса загрузки}
+Как правило, во время загрузки Linux по экрану быстро пробегает огромное
+количество различных сообщений. Так как мы интенсивно работаем над
+параллелизацией и ускорением процесса загрузки, с каждой новой верисей
+systemd эти сообщения будут пробегать все быстрее и быстрее, вследствие чего,
+читать их будет все труднее. К тому же, многие пользователи применяют
+графические оболочки загрузки (например, Plymouth), полностью скрывающие эти
+сообщения. Тем не~менее, информация, которую несут эти сообщения, была и
+остается чрезвычайно важной — они показывают, успешно ли запустилась каждая
+служба, или попытка ее запуска закончилась ошибкой (зеленое
+\texttt{[~\textcolor{green}{OK}~]} или красное
+\texttt{[~\textcolor{red}{FAILED}~]} соответственно). Итак, с ростом скорости
+загрузки систем, возникает неприятная ситуация: информация о результатах
+запуска служб бывает очень важна, а просматривать ее все тяжелее. systemd
+предлагает выход из этой ситуации: он отслеживает и запоминает факты успешного
+или неудачного запуска служб на этапе загрузки, а такжи сбои служб во время
+работы. К таким случая относятся выходы с ненулевым кодом, ошибки
+сегментирования и т.п. Введя systemctl status в своей командной оболочке, вы
+можете ознакомиться с состоянием всех служб, как <<родных>> (native) для
+systemd, так и классических SysV/LSB служб, поддерживаемых в целях
+совместимости: 
+
+\begin{landscape}
+\begin{Verbatim}[fontsize=\small]
+[root@lambda] ~# systemctl
+UNIT                                          LOAD   ACTIVE       SUB        JOB       DESCRIPTION
+dev-hugepages.automount                       loaded active       running              Huge Pages File System Automount Point
+dev-mqueue.automount                          loaded active       running              POSIX Message Queue File System Automount Point
+proc-sys-fs-binfmt_misc.automount             loaded active       waiting              Arbitrary Executable File Formats File System Automount Point
+sys-kernel-debug.automount                    loaded active       waiting              Debug File System Automount Point
+sys-kernel-security.automount                 loaded active       waiting              Security File System Automount Point
+sys-devices-pc...0000:02:00.0-net-eth0.device loaded active       plugged              82573L Gigabit Ethernet Controller
+[...]
+sys-devices-virtual-tty-tty9.device           loaded active       plugged              /sys/devices/virtual/tty/tty9
+-.mount                                       loaded active       mounted              /
+boot.mount                                    loaded active       mounted              /boot
+dev-hugepages.mount                           loaded active       mounted              Huge Pages File System
+dev-mqueue.mount                              loaded active       mounted              POSIX Message Queue File System
+home.mount                                    loaded active       mounted              /home
+proc-sys-fs-binfmt_misc.mount                 loaded active       mounted              Arbitrary Executable File Formats File System
+abrtd.service                                 loaded active       running              ABRT Automated Bug Reporting Tool
+accounts-daemon.service                       loaded active       running              Accounts Service
+acpid.service                                 loaded active       running              ACPI Event Daemon
+atd.service                                   loaded active       running              Execution Queue Daemon
+auditd.service                                loaded active       running              Security Auditing Service
+avahi-daemon.service                          loaded active       running              Avahi mDNS/DNS-SD Stack
+bluetooth.service                             loaded active       running              Bluetooth Manager
+console-kit-daemon.service                    loaded active       running              Console Manager
+cpuspeed.service                              loaded active       exited               LSB: processor frequency scaling support
+crond.service                                 loaded active       running              Command Scheduler
+cups.service                                  loaded active       running              CUPS Printing Service
+dbus.service                                  loaded active       running              D-Bus System Message Bus
+getty@tty2.service                            loaded active       running              Getty on tty2
+getty@tty3.service                            loaded active       running              Getty on tty3
+getty@tty4.service                            loaded active       running              Getty on tty4
+getty@tty5.service                            loaded active       running              Getty on tty5
+getty@tty6.service                            loaded active       running              Getty on tty6
+haldaemon.service                             loaded active       running              Hardware Manager
+hdapsd@sda.service                            loaded active       running              sda shock protection daemon
+irqbalance.service                            loaded active       running              LSB: start and stop irqbalance daemon
+iscsi.service                                 loaded active       exited               LSB: Starts and stops login and scanning of iSCSI devices.
+iscsid.service                                loaded active       exited               LSB: Starts and stops login iSCSI daemon.
+livesys-late.service                          loaded active       exited               LSB: Late init script for live image.
+livesys.service                               loaded active       exited               LSB: Init script for live image.
+lvm2-monitor.service                          loaded active       exited               LSB: Monitoring of LVM2 mirrors, snapshots etc. using dmeventd or progress polling
+mdmonitor.service                             loaded active       running              LSB: Start and stop the MD software RAID monitor
+modem-manager.service                         loaded active       running              Modem Manager
+netfs.service                                 loaded active       exited               LSB: Mount and unmount network filesystems.
+NetworkManager.service                        loaded active       running              Network Manager
+ntpd.service                                  loaded maintenance  maintenance          Network Time Service
+polkitd.service                               loaded active       running              Policy Manager
+prefdm.service                                loaded active       running              Display Manager
+rc-local.service                              loaded active       exited               /etc/rc.local Compatibility
+rpcbind.service                               loaded active       running              RPC Portmapper Service
+rsyslog.service                               loaded active       running              System Logging Service
+rtkit-daemon.service                          loaded active       running              RealtimeKit Scheduling Policy Service
+sendmail.service                              loaded active       running              LSB: start and stop sendmail
+sshd@172.31.0.53:22-172.31.0.4:36368.service  loaded active       running              SSH Per-Connection Server
+sysinit.service                               loaded active       running              System Initialization
+systemd-logger.service                        loaded active       running              systemd Logging Daemon
+udev-post.service                             loaded active       exited               LSB: Moves the generated persistent udev rules to /etc/udev/rules.d
+udisks.service                                loaded active       running              Disk Manager
+upowerd.service                               loaded active       running              Power Manager
+wpa_supplicant.service                        loaded active       running              Wi-Fi Security Service
+avahi-daemon.socket                           loaded active       listening            Avahi mDNS/DNS-SD Stack Activation Socket
+cups.socket                                   loaded active       listening            CUPS Printing Service Sockets
+dbus.socket                                   loaded active       running              dbus.socket
+rpcbind.socket                                loaded active       listening            RPC Portmapper Socket
+sshd.socket                                   loaded active       listening            sshd.socket
+systemd-initctl.socket                        loaded active       listening            systemd /dev/initctl Compatibility Socket
+systemd-logger.socket                         loaded active       running              systemd Logging Socket
+systemd-shutdownd.socket                      loaded active       listening            systemd Delayed Shutdown Socket
+dev-disk-by\x1...x1db22a\x1d870f1adf2732.swap loaded active       active               /dev/disk/by-uuid/fd626ef7-34a4-4958-b22a-870f1adf2732
+basic.target                                  loaded active       active               Basic System
+bluetooth.target                              loaded active       active               Bluetooth
+dbus.target                                   loaded active       active               D-Bus
+getty.target                                  loaded active       active               Login Prompts
+graphical.target                              loaded active       active               Graphical Interface
+local-fs.target                               loaded active       active               Local File Systems
+multi-user.target                             loaded active       active               Multi-User
+network.target                                loaded active       active               Network
+remote-fs.target                              loaded active       active               Remote File Systems
+sockets.target                                loaded active       active               Sockets
+swap.target                                   loaded active       active               Swap
+sysinit.target                                loaded active       active               System Initialization
+
+LOAD   = Reflects whether the unit definition was properly loaded.
+ACTIVE = The high-level unit activation state, i.e. generalization of SUB.
+SUB    = The low-level unit activation state, values depend on unit type.
+JOB    = Pending job for the unit.
+
+221 units listed. Pass --all to see inactive units, too.
+[root@lambda] ~#
+\end{Verbatim}
+(Листинг был сокращен за счет удаления строк, не~относящихся к теме статьи.)
+\end{landscape}
+
+Обратите внимание на графу ACTIVE, в которой отображается обобщенный статус
+службы (или любого другого юнита systemd: устройства, сокета, точки
+монтирования~--- их мы рассмотрим подробнее в последующих статьях). Основными
+значениями обощенного статуса являются active (служба выполняется) и inactive
+(служба не~была запущена). Также существуют и другие статусы. Например,
+внимательно посмотрев на листинг выше, вы можете заметить, что служба ntpd
+(сервер точного времени) находится в состоянии, обозначенном как maintenance.
+Чтобы узнать, что же произошло с ntpd, воспользуемся командой
++systemctl status+: 
+\begin{Verbatim}[commandchars=\\\{\}]
+[root@lambda] ~# systemctl status ntpd.service
+ntpd.service - Network Time Service
+	  Loaded: loaded (/etc/systemd/system/ntpd.service)
+	  Active: \textcolor{red}{maintenance}
+	    Main: 953 (code=exited, status=255)
+	  CGroup: name=systemd:/systemd-1/ntpd.service
+[root@lambda] ~#
+\end{Verbatim}
+
+systemd сообщает нам, что ntpd был запущен (с идентификатором процесса 953) и
+аварийно завершил работу (с кодом выхода 255).
+
+В последующих версиях systemd, мы планируем добавить возможность вызова в
+таких ситуациях ABRT (Automated Bug Report Tool), но для этого необходима
+соответствующая поддержка со стороны самого ABRT. Соответствующий запрос уже
+\href{https://bugzilla.redhat.com/show_bug.cgi?id=622773}{направлен} его
+разработчикам, однако пока не~встретил среди них поддержки.
+
+Резюме: использование +systemctl+ и +systemctl status+ представляет современную,
+более удобную и эффективную альтернативу разглядыванию быстро пробегающих по
+экрану сообщений в классическом SysV. +systemctl status+ дает возможность
+получить развернутую информацию о характере ошибки и, кроме того, в отличие
+от сообщений SysV, показывает не~только ошибки при запуске, но и ошибки,
+возникшие во время исполнения службы. 
+
+\section{О службах и процессах}
+В большинстве современных Linux-систем количество одновременно работающих
+процессов обычно весьма значительно. Понять, откуда взялся и что делает тот
+или иной процесс, становится все сложнее и сложнее. Многие службы используют
+сразу несколько рабочих процессов, и это отнюдь не~всегда можно легко
+распознать по выводу команды ps. Встречаются еще более сложные ситуации,
+когда демон запускает сторонние процессы~--- например, веб-сервер выполняет
+CGI-программы, а демон cron~--- команды, предписанные ему в crontab.
+
+Немного помочь в решении этой проблемы может древовидная иерархия процессов,
+отображаемая по команде +ps xaf+. Именно <<немного помочь>>, а не~решить
+полностью. В частности, процессы, родители которых умирают раньше их самих,
+становят потомками PID~1 (процесса init), что сразу затрудняет процесс
+выяснения их происхождения. Кроме того, процесс может избавиться от связи с
+родителем через две последовательные операции +fork()+ (В целом, эта возможность
+признается нужной и полезной, и является частью используемого в Unix подхода
+к разработке демонов.) Также, не~будем забывать, что процесс легко может
+изменить свое имя посредством +PR_SETNAME+, или задав значение
++argv[0]+, что также усложняет процесс его опознания\footnote{Прим.
+перев.: стоит отметить, что перечисленные ситуации могут возникнуть не~только
+вследствие ошибок в коде и/или конфигурации программ, но и в результате злого
+умысла. Например, очень часто встречается ситуация, когда установленный на
+взломанном сервере процесс-бэкдор маскируется под нормального демона, меняя
+себе имя, скажем, на httpd}.
+
+systemd предоставляет простой путь для решения обсуждаемой задачи. Запуская
+очередной новый процесс, systemd помещает его в отдельную контрольную группу
+с соответствующим именем. Контрольные группы Linux предоставляют очень
+удобный инструмент для иерархической структуризации процессов: когда
+какой-либо процесс порождает потомка, этот потомок автоматически включается в
+ту же группу, что и родитель. При этом, что очень важно, непривилегированные
+процессы не~могут изменить свое положение в этой иерархии. Таким образом,
+контрольные группы позволяют точно установить происхождение конкретного
+процесса, вне зависимости от того, сколько раз он форкался и переименовывал
+себя~--- имя его контрольной группы невозможно спрятать или изменить. Кроме
+того, при штатном завершении родительской службы, будут завершены и все
+порожденные ею процессы, как бы они ни пытались сбежать. С systemd уже
+невозможна ситуация, когда после остановки web-сервера, некорректно
+форкнувшийся CGI-процесс продолжает исполняться вплоть до последних секунд
+работы системы.
+
+В этой статье мы рассмотрим две простых команды, которые позволят вам
+наглядно увидеть схему взаимоотношений systemd и порожденных им процессов.
+Первая из этих команд~--- все та же +ps+, однако на этот раз в ее параметры
+добавлено указание выводить сведения по контрольным группам, а также другую
+интересную информацию: 
+
+\begin{landscape}
+\begin{Verbatim}[fontsize=\small]
+$ ps xawf -eo pid,user,cgroup,args
+  PID USER     CGROUP                              COMMAND
+    2 root     -                                   [kthreadd]
+    3 root     -                                    \_ [ksoftirqd/0]
+[...]
+ 4281 root     -                                    \_ [flush-8:0]
+    1 root     name=systemd:/systemd-1             /sbin/init
+  455 root     name=systemd:/systemd-1/sysinit.service /sbin/udevd -d
+28188 root     name=systemd:/systemd-1/sysinit.service  \_ /sbin/udevd -d
+28191 root     name=systemd:/systemd-1/sysinit.service  \_ /sbin/udevd -d
+ 1096 dbus     name=systemd:/systemd-1/dbus.service /bin/dbus-daemon --system --address=systemd: --nofork --systemd-activation
+ 1131 root     name=systemd:/systemd-1/auditd.service auditd
+ 1133 root     name=systemd:/systemd-1/auditd.service  \_ /sbin/audispd
+ 1135 root     name=systemd:/systemd-1/auditd.service      \_ /usr/sbin/sedispatch
+ 1171 root     name=systemd:/systemd-1/NetworkManager.service /usr/sbin/NetworkManager --no-daemon
+ 4028 root     name=systemd:/systemd-1/NetworkManager.service  \_ /sbin/dhclient -d -4 -sf /usr/libexec/nm-dhcp-client.action -pf /var/run/dhclient-wlan0.pid -lf /var/lib/dhclient/dhclient-7d32a784-ede9-4cf6-9ee3-60edc0bce5ff-wlan0.lease -
+ 1175 avahi    name=systemd:/systemd-1/avahi-daemon.service avahi-daemon: running [epsilon.local]
+ 1194 avahi    name=systemd:/systemd-1/avahi-daemon.service  \_ avahi-daemon: chroot helper
+ 1193 root     name=systemd:/systemd-1/rsyslog.service /sbin/rsyslogd -c 4
+ 1195 root     name=systemd:/systemd-1/cups.service cupsd -C /etc/cups/cupsd.conf
+ 1207 root     name=systemd:/systemd-1/mdmonitor.service mdadm --monitor --scan -f --pid-file=/var/run/mdadm/mdadm.pid
+ 1210 root     name=systemd:/systemd-1/irqbalance.service irqbalance
+ 1216 root     name=systemd:/systemd-1/dbus.service /usr/sbin/modem-manager
+ 1219 root     name=systemd:/systemd-1/dbus.service /usr/libexec/polkit-1/polkitd
+ 1242 root     name=systemd:/systemd-1/dbus.service /usr/sbin/wpa_supplicant -c /etc/wpa_supplicant/wpa_supplicant.conf -B -u -f /var/log/wpa_supplicant.log -P /var/run/wpa_supplicant.pid
+ 1249 68       name=systemd:/systemd-1/haldaemon.service hald
+ 1250 root     name=systemd:/systemd-1/haldaemon.service  \_ hald-runner
+ 1273 root     name=systemd:/systemd-1/haldaemon.service      \_ hald-addon-input: Listening on /dev/input/event3 /dev/input/event9 /dev/input/event1 /dev/input/event7 /dev/input/event2 /dev/input/event0 /dev/input/event8
+ 1275 root     name=systemd:/systemd-1/haldaemon.service      \_ /usr/libexec/hald-addon-rfkill-killswitch
+ 1284 root     name=systemd:/systemd-1/haldaemon.service      \_ /usr/libexec/hald-addon-leds
+ 1285 root     name=systemd:/systemd-1/haldaemon.service      \_ /usr/libexec/hald-addon-generic-backlight
+ 1287 68       name=systemd:/systemd-1/haldaemon.service      \_ /usr/libexec/hald-addon-acpi
+ 1317 root     name=systemd:/systemd-1/abrtd.service /usr/sbin/abrtd -d -s
+ 1332 root     name=systemd:/systemd-1/getty@.service/tty2 /sbin/mingetty tty2
+ 1339 root     name=systemd:/systemd-1/getty@.service/tty3 /sbin/mingetty tty3
+ 1342 root     name=systemd:/systemd-1/getty@.service/tty5 /sbin/mingetty tty5
+ 1343 root     name=systemd:/systemd-1/getty@.service/tty4 /sbin/mingetty tty4
+ 1344 root     name=systemd:/systemd-1/crond.service crond
+ 1346 root     name=systemd:/systemd-1/getty@.service/tty6 /sbin/mingetty tty6
+ 1362 root     name=systemd:/systemd-1/sshd.service /usr/sbin/sshd
+ 1376 root     name=systemd:/systemd-1/prefdm.service /usr/sbin/gdm-binary -nodaemon
+ 1391 root     name=systemd:/systemd-1/prefdm.service  \_ /usr/libexec/gdm-simple-slave --display-id /org/gnome/DisplayManager/Display1 --force-active-vt
+ 1394 root     name=systemd:/systemd-1/prefdm.service      \_ /usr/bin/Xorg :0 -nr -verbose -auth /var/run/gdm/auth-for-gdm-f2KUOh/database -nolisten tcp vt1
+ 1495 root     name=systemd:/user/lennart/1             \_ pam: gdm-password
+ 1521 lennart  name=systemd:/user/lennart/1                 \_ gnome-session
+ 1621 lennart  name=systemd:/user/lennart/1                     \_ metacity
+ 1635 lennart  name=systemd:/user/lennart/1                     \_ gnome-panel
+ 1638 lennart  name=systemd:/user/lennart/1                     \_ nautilus
+ 1640 lennart  name=systemd:/user/lennart/1                     \_ /usr/libexec/polkit-gnome-authentication-agent-1
+ 1641 lennart  name=systemd:/user/lennart/1                     \_ /usr/bin/seapplet
+ 1644 lennart  name=systemd:/user/lennart/1                     \_ gnome-volume-control-applet
+ 1646 lennart  name=systemd:/user/lennart/1                     \_ /usr/sbin/restorecond -u
+ 1652 lennart  name=systemd:/user/lennart/1                     \_ /usr/bin/devilspie
+ 1662 lennart  name=systemd:/user/lennart/1                     \_ nm-applet --sm-disable
+ 1664 lennart  name=systemd:/user/lennart/1                     \_ gnome-power-manager
+ 1665 lennart  name=systemd:/user/lennart/1                     \_ /usr/libexec/gdu-notification-daemon
+ 1670 lennart  name=systemd:/user/lennart/1                     \_ /usr/libexec/evolution/2.32/evolution-alarm-notify
+ 1672 lennart  name=systemd:/user/lennart/1                     \_ /usr/bin/python /usr/share/system-config-printer/applet.py
+ 1674 lennart  name=systemd:/user/lennart/1                     \_ /usr/lib64/deja-dup/deja-dup-monitor
+ 1675 lennart  name=systemd:/user/lennart/1                     \_ abrt-applet
+ 1677 lennart  name=systemd:/user/lennart/1                     \_ bluetooth-applet
+ 1678 lennart  name=systemd:/user/lennart/1                     \_ gpk-update-icon
+ 1408 root     name=systemd:/systemd-1/console-kit-daemon.service /usr/sbin/console-kit-daemon --no-daemon
+ 1419 gdm      name=systemd:/systemd-1/prefdm.service /usr/bin/dbus-launch --exit-with-session
+ 1453 root     name=systemd:/systemd-1/dbus.service /usr/libexec/upowerd
+ 1473 rtkit    name=systemd:/systemd-1/rtkit-daemon.service /usr/libexec/rtkit-daemon
+ 1496 root     name=systemd:/systemd-1/accounts-daemon.service /usr/libexec/accounts-daemon
+ 1499 root     name=systemd:/systemd-1/systemd-logger.service /lib/systemd/systemd-logger
+ 1511 lennart  name=systemd:/systemd-1/prefdm.service /usr/bin/gnome-keyring-daemon --daemonize --login
+ 1534 lennart  name=systemd:/user/lennart/1        dbus-launch --sh-syntax --exit-with-session
+ 1535 lennart  name=systemd:/user/lennart/1        /bin/dbus-daemon --fork --print-pid 5 --print-address 7 --session
+ 1603 lennart  name=systemd:/user/lennart/1        /usr/libexec/gconfd-2
+ 1612 lennart  name=systemd:/user/lennart/1        /usr/libexec/gnome-settings-daemon
+ 1615 lennart  name=systemd:/user/lennart/1        /usr/libexec/gvfsd
+ 1626 lennart  name=systemd:/user/lennart/1        /usr/libexec//gvfs-fuse-daemon /home/lennart/.gvfs
+ 1634 lennart  name=systemd:/user/lennart/1        /usr/bin/pulseaudio --start --log-target=syslog
+ 1649 lennart  name=systemd:/user/lennart/1         \_ /usr/libexec/pulse/gconf-helper
+ 1645 lennart  name=systemd:/user/lennart/1        /usr/libexec/bonobo-activation-server --ac-activate --ior-output-fd=24
+ 1668 lennart  name=systemd:/user/lennart/1        /usr/libexec/im-settings-daemon
+ 1701 lennart  name=systemd:/user/lennart/1        /usr/libexec/gvfs-gdu-volume-monitor
+ 1707 lennart  name=systemd:/user/lennart/1        /usr/bin/gnote --panel-applet --oaf-activate-iid=OAFIID:GnoteApplet_Factory --oaf-ior-fd=22
+ 1725 lennart  name=systemd:/user/lennart/1        /usr/libexec/clock-applet
+ 1727 lennart  name=systemd:/user/lennart/1        /usr/libexec/wnck-applet
+ 1729 lennart  name=systemd:/user/lennart/1        /usr/libexec/notification-area-applet
+ 1733 root     name=systemd:/systemd-1/dbus.service /usr/libexec/udisks-daemon
+ 1747 root     name=systemd:/systemd-1/dbus.service  \_ udisks-daemon: polling /dev/sr0
+ 1759 lennart  name=systemd:/user/lennart/1        gnome-screensaver
+ 1780 lennart  name=systemd:/user/lennart/1        /usr/libexec/gvfsd-trash --spawner :1.9 /org/gtk/gvfs/exec_spaw/0
+ 1864 lennart  name=systemd:/user/lennart/1        /usr/libexec/gvfs-afc-volume-monitor
+ 1874 lennart  name=systemd:/user/lennart/1        /usr/libexec/gconf-im-settings-daemon
+ 1903 lennart  name=systemd:/user/lennart/1        /usr/libexec/gvfsd-burn --spawner :1.9 /org/gtk/gvfs/exec_spaw/1
+ 1909 lennart  name=systemd:/user/lennart/1        gnome-terminal
+ 1913 lennart  name=systemd:/user/lennart/1         \_ gnome-pty-helper
+ 1914 lennart  name=systemd:/user/lennart/1         \_ bash
+29231 lennart  name=systemd:/user/lennart/1         |   \_ ssh tango
+ 2221 lennart  name=systemd:/user/lennart/1         \_ bash
+ 4193 lennart  name=systemd:/user/lennart/1         |   \_ ssh tango
+ 2461 lennart  name=systemd:/user/lennart/1         \_ bash
+29219 lennart  name=systemd:/user/lennart/1         |   \_ emacs systemd-for-admins-1.txt
+15113 lennart  name=systemd:/user/lennart/1         \_ bash
+27251 lennart  name=systemd:/user/lennart/1             \_ empathy
+29504 lennart  name=systemd:/user/lennart/1             \_ ps xawf -eo pid,user,cgroup,args
+ 1968 lennart  name=systemd:/user/lennart/1        ssh-agent
+ 1994 lennart  name=systemd:/user/lennart/1        gpg-agent --daemon --write-env-file
+18679 lennart  name=systemd:/user/lennart/1        /bin/sh /usr/lib64/firefox-3.6/run-mozilla.sh /usr/lib64/firefox-3.6/firefox
+18741 lennart  name=systemd:/user/lennart/1         \_ /usr/lib64/firefox-3.6/firefox
+28900 lennart  name=systemd:/user/lennart/1             \_ /usr/lib64/nspluginwrapper/npviewer.bin --plugin /usr/lib64/mozilla/plugins/libflashplayer.so --connection /org/wrapper/NSPlugins/libflashplayer.so/18741-6
+ 4016 root     name=systemd:/systemd-1/sysinit.service /usr/sbin/bluetoothd --udev
+ 4094 smmsp    name=systemd:/systemd-1/sendmail.service sendmail: Queue runner@01:00:00 for /var/spool/clientmqueue
+ 4096 root     name=systemd:/systemd-1/sendmail.service sendmail: accepting connections
+ 4112 ntp      name=systemd:/systemd-1/ntpd.service /usr/sbin/ntpd -n -u ntp:ntp -g
+27262 lennart  name=systemd:/user/lennart/1        /usr/libexec/mission-control-5
+27265 lennart  name=systemd:/user/lennart/1        /usr/libexec/telepathy-haze
+27268 lennart  name=systemd:/user/lennart/1        /usr/libexec/telepathy-logger
+27270 lennart  name=systemd:/user/lennart/1        /usr/libexec/dconf-service
+27280 lennart  name=systemd:/user/lennart/1        /usr/libexec/notification-daemon
+27284 lennart  name=systemd:/user/lennart/1        /usr/libexec/telepathy-gabble
+27285 lennart  name=systemd:/user/lennart/1        /usr/libexec/telepathy-salut
+27297 lennart  name=systemd:/user/lennart/1        /usr/libexec/geoclue-yahoo
+\end{Verbatim}
+(Данный листинг был сокращен за счет удаления из него строк, относящихся к
+потокам ядра, так как они никак не~относятся к обсуждаемой нами теме.)
+\end{landscape}
+
+Обратите внимание на третий столбец, показывающий имя контрольной группы,
+которое systemd присваивает каждому процессу. Например, процесс +udev+
+находится в группе +name=systemd:/systemd-1/sysinit.service+. В эту группу
+помещаются процессы, запущенные службой +sysinit.service+, которая запускается
+на ранней стадии загрузки.
+
+Вы можете очень сильно упростить себе работу, если назначите для
+вышеприведенной команды какой-нибудь простой и короткий псевдоним, например 
+\begin{Verbatim}
+alias psc='ps xawf -eo pid,user,cgroup,args'
+\end{Verbatim}
+---~теперь для получения исчерпывающей информации по процессам достаточно будет
+нажать всего четыре клавиши.
+
+Альтернативый способ получить ту же информацию~--- воспользоваться утилитой
++systemd-cgls+, входящей в комплект поставки systemd. Она отображает иерархию
+контрольных групп в виде превдографической диаграммы-дерева: 
+
+\begin{landscape}
+\begin{Verbatim}[fontsize=\small]
+$ systemd-cgls
++    2 [kthreadd]
+[...]
++ 4281 [flush-8:0]
++ user
+| \ lennart
+|   \ 1
+|     +  1495 pam: gdm-password
+|     +  1521 gnome-session
+|     +  1534 dbus-launch --sh-syntax --exit-with-session
+|     +  1535 /bin/dbus-daemon --fork --print-pid 5 --print-address 7 --session
+|     +  1603 /usr/libexec/gconfd-2
+|     +  1612 /usr/libexec/gnome-settings-daemon
+|     +  1615 /ushr/libexec/gvfsd
+|     +  1621 metacity
+|     +  1626 /usr/libexec//gvfs-fuse-daemon /home/lennart/.gvfs
+|     +  1634 /usr/bin/pulseaudio --start --log-target=syslog
+|     +  1635 gnome-panel
+|     +  1638 nautilus
+|     +  1640 /usr/libexec/polkit-gnome-authentication-agent-1
+|     +  1641 /usr/bin/seapplet
+|     +  1644 gnome-volume-control-applet
+|     +  1645 /usr/libexec/bonobo-activation-server --ac-activate --ior-output-fd=24
+|     +  1646 /usr/sbin/restorecond -u
+|     +  1649 /usr/libexec/pulse/gconf-helper
+|     +  1652 /usr/bin/devilspie
+|     +  1662 nm-applet --sm-disable
+|     +  1664 gnome-power-manager
+|     +  1665 /usr/libexec/gdu-notification-daemon
+|     +  1668 /usr/libexec/im-settings-daemon
+|     +  1670 /usr/libexec/evolution/2.32/evolution-alarm-notify
+|     +  1672 /usr/bin/python /usr/share/system-config-printer/applet.py
+|     +  1674 /usr/lib64/deja-dup/deja-dup-monitor
+|     +  1675 abrt-applet
+|     +  1677 bluetooth-applet
+|     +  1678 gpk-update-icon
+|     +  1701 /usr/libexec/gvfs-gdu-volume-monitor
+|     +  1707 /usr/bin/gnote --panel-applet --oaf-activate-iid=OAFIID:GnoteApplet_Factory --oaf-ior-fd=22
+|     +  1725 /usr/libexec/clock-applet
+|     +  1727 /usr/libexec/wnck-applet
+|     +  1729 /usr/libexec/notification-area-applet
+|     +  1759 gnome-screensaver
+|     +  1780 /usr/libexec/gvfsd-trash --spawner :1.9 /org/gtk/gvfs/exec_spaw/0
+|     +  1864 /usr/libexec/gvfs-afc-volume-monitor
+|     +  1874 /usr/libexec/gconf-im-settings-daemon
+|     +  1882 /usr/libexec/gvfs-gphoto2-volume-monitor
+|     +  1903 /usr/libexec/gvfsd-burn --spawner :1.9 /org/gtk/gvfs/exec_spaw/1
+|     +  1909 gnome-terminal
+|     +  1913 gnome-pty-helper
+|     +  1914 bash
+|     +  1968 ssh-agent
+|     +  1994 gpg-agent --daemon --write-env-file
+|     +  2221 bash
+|     +  2461 bash
+|     +  4193 ssh tango
+|     + 15113 bash
+|     + 18679 /bin/sh /usr/lib64/firefox-3.6/run-mozilla.sh /usr/lib64/firefox-3.6/firefox
+|     + 18741 /usr/lib64/firefox-3.6/firefox
+|     + 27251 empathy
+|     + 27262 /usr/libexec/mission-control-5
+|     + 27265 /usr/libexec/telepathy-haze
+|     + 27268 /usr/libexec/telepathy-logger
+|     + 27270 /usr/libexec/dconf-service
+|     + 27280 /usr/libexec/notification-daemon
+|     + 27284 /usr/libexec/telepathy-gabble
+|     + 27285 /usr/libexec/telepathy-salut
+|     + 27297 /usr/libexec/geoclue-yahoo
+|     + 28900 /usr/lib64/nspluginwrapper/npviewer.bin --plugin /usr/lib64/mozilla/plugins/libflashplayer.so --connection /org/wrapper/NSPlugins/libflashplayer.so/18741-6
+|     + 29219 emacs systemd-for-admins-1.txt
+|     + 29231 ssh tango
+|     \ 29519 systemd-cgls
+\ systemd-1
+  + 1 /sbin/init
+  + ntpd.service
+  | \ 4112 /usr/sbin/ntpd -n -u ntp:ntp -g
+  + systemd-logger.service
+  | \ 1499 /lib/systemd/systemd-logger
+  + accounts-daemon.service
+  | \ 1496 /usr/libexec/accounts-daemon
+  + rtkit-daemon.service
+  | \ 1473 /usr/libexec/rtkit-daemon
+  + console-kit-daemon.service
+  | \ 1408 /usr/sbin/console-kit-daemon --no-daemon
+  + prefdm.service
+  | + 1376 /usr/sbin/gdm-binary -nodaemon
+  | + 1391 /usr/libexec/gdm-simple-slave --display-id /org/gnome/DisplayManager/Display1 --force-active-vt
+  | + 1394 /usr/bin/Xorg :0 -nr -verbose -auth /var/run/gdm/auth-for-gdm-f2KUOh/database -nolisten tcp vt1
+  | + 1419 /usr/bin/dbus-launch --exit-with-session
+  | \ 1511 /usr/bin/gnome-keyring-daemon --daemonize --login
+  + getty@.service
+  | + tty6
+  | | \ 1346 /sbin/mingetty tty6
+  | + tty4
+  | | \ 1343 /sbin/mingetty tty4
+  | + tty5
+  | | \ 1342 /sbin/mingetty tty5
+  | + tty3
+  | | \ 1339 /sbin/mingetty tty3
+  | \ tty2
+  |   \ 1332 /sbin/mingetty tty2
+  + abrtd.service
+  | \ 1317 /usr/sbin/abrtd -d -s
+  + crond.service
+  | \ 1344 crond
+  + sshd.service
+  | \ 1362 /usr/sbin/sshd
+  + sendmail.service
+  | + 4094 sendmail: Queue runner@01:00:00 for /var/spool/clientmqueue
+  | \ 4096 sendmail: accepting connections
+  + haldaemon.service
+  | + 1249 hald
+  | + 1250 hald-runner
+  | + 1273 hald-addon-input: Listening on /dev/input/event3 /dev/input/event9 /dev/input/event1 /dev/input/event7 /dev/input/event2 /dev/input/event0 /dev/input/event8
+  | + 1275 /usr/libexec/hald-addon-rfkill-killswitch
+  | + 1284 /usr/libexec/hald-addon-leds
+  | + 1285 /usr/libexec/hald-addon-generic-backlight
+  | \ 1287 /usr/libexec/hald-addon-acpi
+  + irqbalance.service
+  | \ 1210 irqbalance
+  + avahi-daemon.service
+  | + 1175 avahi-daemon: running [epsilon.local]
+  + NetworkManager.service
+  | + 1171 /usr/sbin/NetworkManager --no-daemon
+  | \ 4028 /sbin/dhclient -d -4 -sf /usr/libexec/nm-dhcp-client.action -pf /var/run/dhclient-wlan0.pid -lf /var/lib/dhclient/dhclient-7d32a784-ede9-4cf6-9ee3-60edc0bce5ff-wlan0.lease -cf /var/run/nm-dhclient-wlan0.conf wlan0
+  + rsyslog.service
+  | \ 1193 /sbin/rsyslogd -c 4
+  + mdmonitor.service
+  | \ 1207 mdadm --monitor --scan -f --pid-file=/var/run/mdadm/mdadm.pid
+  + cups.service
+  | \ 1195 cupsd -C /etc/cups/cupsd.conf
+  + auditd.service
+  | + 1131 auditd
+  | + 1133 /sbin/audispd
+  | \ 1135 /usr/sbin/sedispatch
+  + dbus.service
+  | +  1096 /bin/dbus-daemon --system --address=systemd: --nofork --systemd-activation
+  | +  1216 /usr/sbin/modem-manager
+  | +  1219 /usr/libexec/polkit-1/polkitd
+  | +  1242 /usr/sbin/wpa_supplicant -c /etc/wpa_supplicant/wpa_supplicant.conf -B -u -f /var/log/wpa_supplicant.log -P /var/run/wpa_supplicant.pid
+  | +  1453 /usr/libexec/upowerd
+  | +  1733 /usr/libexec/udisks-daemon
+  | +  1747 udisks-daemon: polling /dev/sr0
+  | \ 29509 /usr/libexec/packagekitd
+  + dev-mqueue.mount
+  + dev-hugepages.mount
+  \ sysinit.service
+    +   455 /sbin/udevd -d
+    +  4016 /usr/sbin/bluetoothd --udev
+    + 28188 /sbin/udevd -d
+    \ 28191 /sbin/udevd -d
+\end{Verbatim}
+(Как и предыдущий, этот листинг был сокращен за счет удаления перечня потоков
+ядра.)
+\end{landscape}
+
+Как видно из листинга, данная команда наглядно показывает принадлежность
+процессов к их контрольным группам, а следовательно, и к службам, так как
+systemd именует группы в соответствии с названиями служб. Например, из
+приведенного листинга нетрудно понять, что служба системного аудита
++auditd.service+ порождает три отдельных процесса: +auditd+,
++audisp+ и +sedispatch+.
+
+Внимательно посмотрев на листинг, можно заметить, что некоторые процессы
+помещены в группу +/user/lennart/1+. Дело в том, что systemd занимается
+отслежванием и группировкой не~только процессов, относящихся к системным
+службам, но и процессов, запущенных в рамках пользовательских сеансов. В
+последующих статьях мы обсудим этот вопрос более подробно. 
+
+\section{HOW-TO: преобразование SysV init-скрипта в systemd service-файл}
+
+Традиционно, службы Unix и Linux (демоны) запускаются через SysV init-скрипты.
+Эти скрипты пишутся на языке Bourne Shell (+/bin/sh+), располагаются в
+специальном каталоге (обычно +/etc/rc.d/init.d/+) и вызываются с одним из
+стандартных параметров (+start+, +stop+, +reload+ и т.п.)~--- таким образом
+указывается действие, которое необходимо прозвести над службой (запустить,
+остановить, заставить перечитать конфигурацию). При запуске службы такой
+скрипт, как правило, вызывает бинарник демона, который, в свою очередь,
+форкается, порождая фоновый процесс (т.е. демонизируется). Заметим, что
+shell-скрипты, как правило, отличается низкой скоростью работы, излишней
+подробностью изложения и крайней хрупкостью. Читать их, из-за изобилия
+всевозможного вспомогательного и дополнительного кода, чрезвычайно тяжело.
+Впрочем, нельзя не~упомянуть, что эти скрипты являются очень гибким
+инструментом (ведь, по сути, это всего лишь код, который можно модифицировать
+как угодно). С другой стороны, многие задачи, возникающие при работе со
+службами, бывает довольно тяжело решить средствами shell-скриптов. К таким
+задачам относятся: огранизация параллельного исполнения, корректное
+отслеживание процессов, конфигурирование различных параметров среды исполнения
+процесса. systemd обеспечивает совместимость с init-скриптами, однако, с учетом
+описанных выше их недостатков, более правильным решением будет использование
+штатных service-файлов systemd для всех установленных в системе служб. Стоит
+отметить что, в отличие от init-скриптов, которые часто приходится
+модифицировать при переносе из одного дистриубтива в другой, один и тот же
+service-файл будет работать в любом дистрибутиве, использующем systemd (а таких
+дистрибутивов с каждым днем становится все больше и больше).  Далее мы вкратце
+рассмотрим процесс преобразования SysV init-скрипта в service-файл systemd.
+Вообще говоря, service-файл должен создаваться разработчиками каждого демона, и
+включаться в комплект его поставки. Если вам удалось успешно создать
+работоспособный service-файл для какого-либо демона, настоятельно рекомендуем
+вам отправить этот файл разработчикам. Вопросы по полноценной интеграции
+демонов с systemd, с максимальным использованием всех его возможностей, будут
+рассмотрены в последующих статьях этого цикла, пока же ограничимся ссылкой на 
+\href{http://0pointer.de/public/systemd-man/daemon.html}{страницу} официальной
+документации. 
+
+Итак, приступим. В качестве пример возьмем init-скрипт демона ABRT (Automatic
+Bug Reporting Tool, службы, занимающейся сбором crash dump'ов). Исходный
+скрипт (в варианте для дистрибутива Fedora) можно загрузить
+\href{http://0pointer.de/public/abrtd}{здесь}.
+
+Начнем с того, что прочитаем исходный скрипт (неожиданный ход, правда?) и
+выделим полезную информацию из груды хлама. Практически у всех init-скриптов
+большая часть кода является чисто вспомогательной, и мало чем отличается от
+одного скрипта к другому. Как правило, при создании новых скриптов этот код
+просто копируется из уже существующих (разработка в стиле copy-paste). Итак,
+в исследуемом скрипте нас интересует следующая информация: 
+
+\begin{itemize}
+	\item Строка описания службы: <<Daemon to detect crashing apps>>. Как
+		нетрудно заметить, комментарии в заголовке скрипта весьма
+		пространны и описывают не~сколько саму службу, сколько
+		скрипт, ее запускающий. service-файлы systemd также включают
+		описание, но оно относится исключительно к службе, а не~к
+		service-файлу. 
+	\item LSB-заголовок\footnote{LSB-заголовок~--- определенная в
+		\href{http://refspecs.freestandards.org/LSB_3.1.1/LSB-Core-generic/LSB-Core-generic/initscrcomconv.html}{Linux
+		Standard Base} схема записи метаданных о службах в блоках
+		комментариев соответствующих init-скриптов. Изначально эта
+		схема была введена именно для того, чтобы стандартизировать
+		init-скрипты во всех дистрибутивах. Однако разработчики
+		многих дистрибутивов не~считают нужным точное исполнение
+		требований LSB, и поэтому формы представления метаданных в
+		различных дистрибутивах могут отличаться. Вследствие этого,
+		при переносе init-скрипта из одного дистрибутива в другой,
+		скрипт приходится модифицировать. Например, демон пересылки
+		почты при описании зависимостей может именоваться
+		+MTA+ или +smtpdaemon+ (Fedora), +smtp+
+		(openSUSE), +mail-transport-agent+ (Debian и Ubuntu),
+		+mail-transfer-agent+. Таким образом,
+		стандарт LSB не~справляется с поставленной задачей},
+		содержащий информацию о зависимостях.  systemd, базирующийся
+		на идеях socket-активации, обычно не~требует явного описания
+		зависимостей (либо требует самого минимального описания).
+		Заметим, что основополагающие принципы systemd, включая
+		socket-активацию, рассмотрены в статье
+		\href{http://0pointer.de/blog/projects/systemd.html}{Rethinking
+		PID 1}, в которой systemd был впервые представлен широкой
+		публике. Ее русский перевод можно прочитать здесь:
+		\href{http://tux-the-penguin.blogspot.com/2010/09/systemd.html}{часть~1},
+		\href{http://tux-the-penguin.blogspot.com/2010/09/systemd-ii.html}{часть~2}.
+		Возвращаясь к нашему примеру: в данном случае ценной
+		информацией о зависимостях является только строка
+		+Required-Start: $syslog+, сообщающая, что для работы
+		abrtd требуется демон системного лога.  Информация о второй
+		зависимости, +$local_fs+, является избыточной, так как
+		systemd приступает к запуску служб уже после того, как все
+		файловые системы готовы для работы. 
+	\item Также, LSB-заголовок сообщает, что данная служба должна быть
+		запущена на уровнях исполнения (runlevels) 3 (консольный
+		многопользовательский) и 5 (графический
+		многопользовательской).
+	\item Исполняемый бинарник демона называется +/usr/sbin/abrtd+. 
+\end{itemize}
+
+Вот и вся полезная информация. Все остальное содержимое 115-строчного скрипта
+является чисто вспомогательным кодом: операции синхронизации и упорядочивания
+запуска (код, относящийся к lock-файлам), вывод информационных сообщений
+(команды +echo+), разбор входных параметров (монструозный блок
++case+).
+
+На основе приведенной выше полезной информации, мы можем написать следующий
+service-файл: 
+\begin{Verbatim}
+[Unit]
+Description=Daemon to detect crashing apps
+After=syslog.target
+
+[Service]
+ExecStart=/usr/sbin/abrtd
+Type=forking
+
+[Install]
+WantedBy=multi-user.target
+\end{Verbatim}
+
+Рассмотрим этот файл поподробнее.
+
+Секция +[Unit]+ содежит самую общую информацию о службе. Не будем
+забывать, что systemd управляет не~только службами, но и многими другими
+объектами, в частности, устройствами, точками монтирования, таймерами и т.п.
+Общее наименование всех этих объектов~--- юнит (unit). Одноименная секция
+конфигурационного файла определяет наиболее общие свойства, которые могут
+быть присущи любому юниту. В нашем случае это, во-первых, строка описания, и
+во-вторых, указание, что данный юнит рекомендуется активировать после запуска
+демона системного лога\footnote{Строго говоря, эту зависимость здесь
+указывать не~нужно~--- в системах, в которых демон системного лога активируется
+через сокет, эта зависимость является избыточной. Современные реализации
+демона системного лога (например, rsyslog начиная с пятой версии)
+поддерживают активацию через сокет. В системах, использующих такие
+реализации, явное указание +After=syslog.target+ будет избыточным, так
+как соответствующая функциональность поддерживается автоматически. Однако,
+эту строчку стоит все-таки указать для обеспечения совместимости с системами,
+использующими устаревшие реализации демона системного лога}. Эта информация,
+как мы помним, была указана в LSB-заголовке исходного init-скрипта. В нашем
+конфигурационном файле мы указываем зависимость от демона системного лога при
+помощи директивы +After+, ссылающейся на юнит +syslog.taget+. Это
+специальный юнит, позволяющий ссылаться на любую реализацию демона системного
+лога, независимо от используемой программы (например, rsyslog или syslog-ng)
+и типа активации (как обычной службы или через log-сокет). Подробнее о таки
+специальных юнитах можно почитать
+\href{http://0pointer.de/public/systemd-man/systemd.special.html}{страницу}
+официальной документации. Обратите внимание, что директива +After+, в
+отсутствие директивы +Requires+, задает лишь порядок загрузки, но
+не~задает жесткой зависимости. То есть, если при загрузке конфигурация
+systemd будет предписывать запуск как демона системного лога, так и abrtd, то
+сначала будет запущен демон системного лога, и только потом abrtd. Если же
+конфигурация не~будет содержать явного указания запустить демон системного
+лога, он не~будет запущен даже при запуске abrtd. И это поведение нас
+полностью устраивает, так как abrtd прекрасно может обходиться и без демона
+системного лога. В противном случае, мы могли бы воспользоваться директивой
++Requires+, задающей жесткую зависимость между юнитами.
+
+Следующая секция, +[Service]+, содержит информацию о службе. Сюда включаются
+настройки, относящие именно к службам, но не~к другим типа юнитов. В нашем
+случае, таких настроек две: +ExecStart+ определяет расположение бинарника
+демона и аргументы, с которыми он будет вызван (в нашем случае они
+отсутствуют), и +Type+, позволяющая задать метод, по которому systemd определит
+окончание периода запуска службы. Традиционный для Unix метод демонизации
+процесса, когда исходный процесс форкается, порождая демона, после чего
+завершается, описывается типом +forking+ (как в нашем случае). Таким образом,
+systemd считает службу запущенной с момента завершения работы исходного
+процесса, и рассматривает в качестве основного процесса этой службы
+порожденный им процесс-демон.
+
+И наконец, третья секция, +[Install]+. Она содержит рекомендации по
+установке конкретного юнита, указывающие, в каких ситуациях он должен быть
+активирован.  В нашем случае, служба abrtd запускается при активации юнита
++multi-user.target+. Это специальный юнит, примерно соответствующий роли
+третьего уровня исполнения классического SysV\footnote{В том контексте, в
+котором он используется в большинстве дистрибутивов семейства Red Hat, а
+именно, многопользовательский режим без запуска графической оболочки}.
+Директива +WantedBy+ никак не~влияет на уже работающую службу, но она
+играет важную роль при выполнении команды systemctl enable, задавая, в каких
+условиях должен активироваться устанавливаемый юнит. В нашем примере, служба
+abrtd будет активироваться при переходе в состояние +multi-user.target+,
+т.е., при каждой нормальной загрузке\footnote{Обратите внимание, что режим
+графической загрузки в systemd (+graphical.target+, аналог runlevel 5
+в SysV) является надстройкой над режимом многопользовательской консольной
+загрузки (+multi-user.target+, аналог runlevel 3 в SysV). Таким
+образом, все службы, запускаемые в режиме +multi-user.target+, будут
+также запускаться и в режиме +graphical.target+} (к <<ненормальным>>
+можно отнести, например, загрузки в режиме +emergency.target+, который
+является аналогом первого уровня исполнения В классической SysV).
+
+Вот и все. Мы получили минимальный рабочий service-файл systemd. Чтобы
+проверить его работоспособность, скопируем его в
++/etc/systemd/system/abrtd.service+, после чего командой
++systemctl daemon-reload+ уведомим systemd об изменении конфигурации.
+Теперь нам остается только запустить нашу службу:
++systemctl start abrtd.service+.  Проверить состояние службы можно
+командой +systemctl status abrtd.service+, а чтобы остановить ее, нужно
+скомандовать +systemctl stop abrtd.service+. И наконец, команда
++systemctl enable abrtd.service+ выполнит установку service-файла,
+обеспечив его активацию при каждой загрузке (аналог +chkconfig abrtd on+
+в классическом SysV).
+
+Приведенный выше service-файл является практический точным переводом
+исходного init-скрипта, и он никак не~использует широкий спектр возможностей,
+предоставляемых systemd. Ниже приведен немного улучшенный вариант: 
+
+\begin{Verbatim}
+[Unit]
+Description=ABRT Automated Bug Reporting Tool
+After=syslog.target
+
+[Service]
+Type=dbus
+BusName=com.redhat.abrt
+ExecStart=/usr/sbin/abrtd -d -s
+
+[Install]
+WantedBy=multi-user.target
+\end{Verbatim}
+
+Чем же новый вариант отличается от предыдущего? Ну, прежде всего, мы уточнили
+описание службы. Однако, ключевым изменением является замена +Type+ с +forking+
+на +dbus+ и связанные с ней изменения: добавление имени службы в шине D-Bus
+(директива +BusName+) и задание полонительных аргументов abrtd <<+-d -s+>>. Но
+зачем вообще нужна эта замена? Каков ее практический смысл? Чтобы ответить на
+этот вопрос, мы снова возращаемся к демонизации. В ходе этой операции, процесс
+дважды форкается и отключается от всех терминалов. Это очень удобно при запуске
+демона через скрипт, но в случае использования таких продвинутых систем
+инициализации, как systemd, такое поведение не~дает никаких преимуществ, но
+вызывает неоправданные задержки. Даже если мы оставим в стороне вопрос скорости
+загрузки, останется такой важный аспект, как отслеживание состояния служб.
+systemd решает и эту задачу, контролируя работу службы и при необходимости
+реагируя на различные события. Например, при неожиданном падении основного
+процесса службы, systemd должен зарегистрировать идентификатор и код выхода
+процесса, также, в зависимости от настроек, он может попытаться перезапустить
+службу, либо активировать какой-либо заранее заданный юнит. Операция
+демонизации несколько затрудняет решение этих задач, так как обычно довольно
+сложно найти связь демонизированного процесса с исходным (собственно, смысл
+демонизации как раз и сводится к уничтожению этой связи) и, сооветственно, для
+systemd сложнее определить, какой из порожденных в рамках данной службы
+процессов является основным. Чтобы упростить для него решение этой задачи, мы и
+воспользовались типом запуска +dbus+. Он подходит для всех служб, которые в
+конце процесса инициализации регистрируют свое имя на шине D-Bus\footnote{В
+настоящее время практически все службы дистрибутива Fedora после запуска
+регистрируется на шине D-Bus}. ABRTd относится к ним.  С новыми настройками,
+systemd запусит процесс abrtd, который уже не~будет форкаться (согласно
+указанным нами ключам <<+-d -s+>>), и в качестве момента окончания периода
+запуска данной службы systemd будет рассматривать момент регистрации имени
++com.redhat.abrt+ на шине D-Bus. В этом случае основным для данной службы будет
+считаться процесс, непосредственно порожденный systemd.  Таким образом, systemd
+располагает удобным методом для определения момента окончания запуска службы, а
+также может легко отслеживать ее состояние. 
+
+Собственно, это все, что нужно было сделать. Мы получили простой
+конфигурационный файл, в 10 строчках которого содержится больше полезной
+информации, чем в 115 строках исходного init-скрипта. Добавляя в наш файл по
+одной строчке, мы можем использовать различные полезные функции systemd,
+создание аналога которых в традиционном init-скрипте потребовало бы
+значительных усилий. Например, добавив строку +Restart=restart-always+, мы
+приказываем systemd автоматически перезапускать службу после каждого ее
+падения. Или, например, добавив +OOMScoreAdjust=-500+, мы попросим ядро сберечь
+эту службу, даже если OOM Killer выйдет на тропу войны. А если мы добавим
+строчку +CPUSchedulingPolicy=idle+, процесс abrtd будет работать только в те
+моменты, когда система больше ничем не~занята, что позволит не создавать помех
+для процессов, активно использующих CPU. 
+
+За более подробным описанием всех опций настройки, вы можете обратиться к
+страницам рукводства
+\href{http://0pointer.de/public/systemd-man/systemd.unit.html}{systemd.unit},
+\href{http://0pointer.de/public/systemd-man/systemd.service.html}{systemd.service},
+\href{http://0pointer.de/public/systemd-man/systemd.exec.html}{systemd.exec}. Полный
+список доступных страниц можно просмотреть
+\href{http://0pointer.de/public/systemd-man/}{здесь}.
+
+Конечно, отнюдь не~все init-скрипты так же легко преобразовать в
+service-файлы. Но, к счастью, <<проблемных>> скриптов не~так уж и много. 
+
+\section{Убить демона}
+
+Убить системного демона нетрудно, правда? Или\ldots все не~так просто?
+
+Если ваш демон функционирует как один процесс, все действительно очень просто.
+Вы командуете +killall rsyslogd+, и демон системного лога останавливается.
+Впрочем, этот метод не~вполне корректен, так как он действует не~только на
+самого демона, но и на другие процессы с тем же именем. Иногда подобное
+поведение может привести к неприятным последствиям. Более правильным будет
+использование pid-файла: +kill \$(cat /var/run/syslogd.pid)+. Вот, вроде
+бы, и все, что вам нужно\ldots Или мы упускаем еще что-то?
+
+Действительно, мы забываем про одну простую вещь: существуют службы, такие, как
+Apache, crond, atd, которые по роду служебной дейятельности должны запускать
+дочерние процессы. Это могут быть совершенно посторонние, указаанные
+пользователем программы (например, задачи cron/at, CGI-скрипты) или полноценные
+серверные процессы (например, Apache workers). Когда вы убиваете основной
+процесс, он может остановить все дочерние процессы. А может и не~остановить. В
+самом деле, если служба функционирует в штатном режиме, ее обычно останавливают
+специальной командой stop. К прямому вызову kill администратор, как правило,
+прибегает только в аварийной ситуации, когда служба работает неправильно и
+может не~среагировать на стандартную команду остановки. Таким образом, убив,
+например, основной сервер Apache, вы можете получить от него в наследство
+работающие CGI-скрипты, причем их родителем автоматически станет PID 1 (init),
+так что установить их происхождение будет не~так-то просто. 
+
+\href{http://www.freedesktop.org/wiki/Software/systemd}{systemd} спешит к нам
+на помощь. Команда +systemctl kill+ позволит отправить сигнал всем
+процессам, порожденным в рамках данной службы. Например: 
+
+\begin{Verbatim}
+# systemctl kill crond.service
+\end{Verbatim}
+
+Вы можете быть уверены, что всем процессам службы cron будет отправлен сигнал
++SIGTERM+. Разумеется, можно отправить и любой другой сигнал. Скажем, если ваши
+дела совсем уж плохи, вы можете воспользоваться и +SIGKILL+: 
+
+\begin{Verbatim}
+# systemctl kill -s SIGKILL crond.service
+\end{Verbatim}
+
+После ввода этой команды, служба cron будет жестоко убита вместе со всеми ее
+дочерними процессами, вне зависимости от того, сколько раз она форкалась, и
+как бы она ни пыталась сбежать из-под нашего контроля при помощи двойного
+форка или
+\href{http://ru.wikipedia.org/wiki/Fork-%D0%B1%D0%BE%D0%BC%D0%B1%D0%B0}{форк-бомбардировки}%
+\footnote{Прим. перев.: стоит особо отметить, что использование контрольных
+групп не~только упрощает процесс уничтожения форк-бомб, но и значительно
+уменьшает ущерб от работающей форк-бомбы. Так как systemd автоматически
+помещает каждую службу и каждый пользовательский сеанс в свою контрольную
+группу по ресурсу процессорного времени, запуск форк-бомбы одним
+пользователем или службой не~создаст значительных проблем с отзывчивостью
+системы у других пользователей и служб. Таким образом, в качестве основной
+угрозы форк-бомбардировки остаются лишь возможности исчерпания памяти и
+идентификаторов процессов (PID)}.
+
+В некоторый случах возникает необходимость отправить сигнал именно основному
+процессу службы. Например, используя +SIGHUP+, мы можем заставить демона
+перечитать файлы конфигурации. Разумеется, вспомогательным процессам
+передавать HUP в этом случае совершенно необязательно. Для решения этой
+задачи вполbb неплохо подойдет и классический метод с pid-файлом, однако у
+systemd и на этот случай есть просто решение, избавляющее вас от
+необходимости искать нужный файл: 
+
+\begin{Verbatim}
+# systemctl kill -s HUP --kill-who=main crond.service
+\end{Verbatim}
+
+Итак, что же принципиально новое привносит systemd в рутинный процесс
+убийства демона? Прежде всего: впервые в истории Linux представлен способ
+принудительной остановки службы, не~зависящий от того, насколько
+добросовестно основной процесс службы выполняет свои обязательства по
+остановке дочерних процессов. Как уже упоминалось выше, необходимость
+отправить процессу +SIGTERM+ или +SIGKILL+ обычно возникает именно
+в нештатной ситуации, когда вы уже не~можете быть уверены, что демон
+корректно исполнит все свои обязанности.
+
+После прочтения сказанного выше у вас может возникнуть вопрос: в чем разница
+между +systemctl kill+ и +systemctl stop+? Отличие состоит в том,
+что +kill+ просто отправляет сигнал заданному процессу, в то время как
+stop действует по <<официально>> определенному методу, вызывая команду,
+определенную в параметре +ExecStop+ конфигурации службы. Обычно команды
+stop бывает вполне достаточно для остановки службы, и к +kill+
+приходится прибегать только в крайних случаях, например, когда служба
+<<зависла>> и не~реагирует на команды.
+
+Кстати говоря, при использовании параметра <<+-s+>>, вы можете указывать
+названия сигналов как с префиксом SIG, так и без него~--- оба варианта будут
+работать.
+
+В завершение стоит сказать, что для нас весьма интересным и неожиданным
+оказался тот факт, что до появления systemd в Linux просто не~существовало
+инструментов, позволяющих корректно отправить сигнал службе в целом, а
+не~отдельному процессу.
+
+\end{document}
