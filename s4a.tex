@@ -3037,12 +3037,12 @@ Unix-администратору при переходе на systemd нужн�
 примера +systemd-logind.service+:
 \defhref{\logind}{http://www.freedesktop.org/software/systemd/man/systemd-logind.service.html}%
 {man:systemd-logind.service(7)}
-\begin{Verbatim}[fontsize=\small,commandchars=\\\{\}]
+\begin{Verbatim}[fontsize=\small,commandchars=\\\{\},codes={\catcode`+=\active},defineactive=\def+{-}]
 $ systemctl status systemd-logind.service
 systemd-logind.service - Login Service
 	  Loaded: loaded (/usr/lib/systemd/system/systemd-logind.service; static)
 	  Active: active (running) since Mon, 25 Jun 2012 22:39:24 +0200; 1 day and 18h ago
-	    Docs: \logind{}
+	    Docs: \href{http://www.freedesktop.org/software/systemd/man/systemd+logind.service.html}{man:systemd-logind.service(7)}
 	          \href{http://www.freedesktop.org/software/systemd/man/logind.conf.html}{man:logind.conf(5)}
 	          \url{http://www.freedesktop.org/wiki/Software/systemd/multiseat}
 	Main PID: 562 (systemd-logind)
