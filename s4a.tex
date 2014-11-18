@@ -23,7 +23,7 @@ pdfauthor={Lennart Poettering, Sergey Ptashnick}}
 	{\smallskip\par}
 \newcommand{\sfnote}[1]{\texorpdfstring{\protect\footnote%
 	{Прим. перев.: #1}}{}}
-\newcommand{\qna}[1]{\medskip\par\textbf{Вопрос: #1}\par Ответ:}
+\newcommand{\qna}[1]{\medskip\par\textbf{Вопрос: #1}\nopagebreak\par Ответ:}
 \newcommand\yousaywtf[1]{\emph{#1}}
 \newcommand\yousaywtfsk[1]{\yousaywtf{#1}\medskip\par}
 % Настройка макета страницы
@@ -3918,6 +3918,7 @@ SELinux ;-) Разумеется, такое дополнение работае
 формате +/var/log/messages+, но с относительными метками времени, как в dmesg.
 
 \section{Управление ресурсами с помощью cgroups}
+\label{sec:resources}
 
 Важную роль в современных компьютерных системах играют механизмы управления
 использованием ресурсов: когда вы запускаете на одной системе несколько
@@ -4667,13 +4668,13 @@ libvirt-lxc или nspawn, но не~c qemu/kvm или xen.
 Если вы будете администрировать несколько таких контейнеров, вас наверняка
 порадует одна из возможностей journal: при запуске на хосте утилиты +journalctl+
 с ключом +-m+, она автоматически обнаружит журналы гостевых контейнеров и
-объединит их вывод с выводом журнала хоста\footnote{Прим. перев.: Этот трюк
-работает благодаря опции +-j+, которую мы передаем программе +systemd-nspawn+
-при запуске контейнера (см. файл юнита выше). В соответствии с ней, в каталоге
-+/var/log/journal+ хоста создается символьная ссылку на соответствующий каталог
-гостя. При этом, так как сообщения от гостей имеют другие machine ID, journalctl
-хоста не~выводит их, если явно не~указать +-m+. Подробности см. на страницах
-руководства
+объединит их вывод с выводом журнала хоста\footnote{\label{ftn:jrnmerge}Прим.
+перев.: Этот трюк работает благодаря опции +-j+, которую мы передаем программе
++systemd-nspawn+ при запуске контейнера (см. файл юнита выше). В соответствии с
+ней, в каталоге +/var/log/journal+ хоста создается символьная ссылку на
+соответствующий каталог гостя. При этом, так как сообщения от гостей имеют
+другие machine ID, journalctl хоста не~выводит их, если явно не~указать +-m+.
+Подробности см. на страницах руководства
 \href{http://www.freedesktop.org/software/systemd/man/systemd-nspawn.html}{systemd-nspawn(1)}
 и
 \href{http://www.freedesktop.org/software/systemd/man/journalctl.html}{journalctl(1)}.}.
@@ -4696,6 +4697,479 @@ systemd, начиная с версии 197. Тем не~менее, наша р
 надеюсь, что эта статья станет хорошей отправной точкой при конфигурировании
 мощных и хорошо масштабируемых серверных систем. За дополнительной информацией
 обращайтесь к документации или приходите на наш IRC-канал. Спасибо за внимание!
+
+\section{Интеграция с контейнерами}
+
+В последнее время, все большую популярность набирает тема использования
+Linux-контейнеров, а вместе с ней на первый план выходят различные реализации
+систем управления контейнерами, такие, как libvirt-lxc, LXC и Docker. В данной
+статье я попробую рассказать о некоторых механизмах интеграции между systemd и
+подобными системами, обеспечивающих унифицированное, <<бесшовное>>
+управление службами, работающими на хосте и в его контейнерах.
+
+В центре нашего внимания будут находиться контейнеры операционных систем (OS
+containers), в которых запускается собственный процесс init. Работающая внутри
+такого контейнера система во многом аналогична полноценной ОС, выполняющейся на
+физическом компьютере\footnote{Прим. перев.: Этим они отличаются от контейнеров
+приложений (apps containers), в которых запускается только само приложение и его
+вспомогательные процессы. Стоит отметить, что из-за широкого использования
+механизмов cgroups и namespaces в systemd, практически любой service-юнит можно
+превратить в контейнер приложения при помощи ряда настроек в его
+конфигурационном файле. См. главы~\ref{sec:chroots}, \ref{sec:security},
+\ref{sec:resources}.}. Б\'{о}льшая часть описанного в данной статье применима ко
+всем программам для управления контейнерами, разработанным с учетом
+\href{http://www.freedesktop.org/wiki/Software/systemd/ContainerInterface/}{рекомендаций}
+по интеграции с systemd (в частности, такая интеграция обеспечена в libvirt-lxc).
+Однако, для простоты изложения, в практических примерах мы будем использовать
+\href{http://www.freedesktop.org/software/systemd/man/systemd-nspawn.html}{systemd-nspawn},
+минималистичную утилиту для управления контейнерами, поставляемую в комплекте с
+systemd. Она использует те же низкоуровневые механизмы, что и другие системы
+управления контейнерами, но отличается предельной простотой использования, пусть
+даже в ущерб гибкости, универсальности и настраиваемости. Мы сами активно
+используем эту утилиту при разработке и тестировании systemd.
+
+Итак, начнем. Первой нашей задачей является развертывание в отдельном каталоге
+образа гостевой операционной системы:
+\begin{Verbatim}
+# yum -y --releasever=20 --nogpg --installroot=/srv/mycontainer \
+> --disablerepo='*' --enablerepo=fedora \
+> install systemd passwd yum fedora-release vim-minimal
+\end{Verbatim}
+
+Эта команда загрузит пакеты, необходимых для создания минимального образа
+Fedora~20, и установит их в каталог +/srv/mycontainer+. Аналогичные команды
+существуют и для других дистрибутивов, в частности, некоторые из них приведены в
+разделе примеров страницы руководства
+\href{http://www.freedesktop.org/software/systemd/man/systemd-nspawn.html\#Examples}{systemd-nspawn(1)}.
+
+Наш контейнер практически готов, осталось лишь задать для него пароль +root+:
+\begin{Verbatim}
+# systemd-nspawn -D /srv/mycontainer
+Spawning container mycontainer on /srv/mycontainer
+Press ^] three times within 1s to kill container.
+-bash-4.2# passwd
+Changing password for user root.
+New password:
+Retype new password:
+passwd: all authentication tokens updated successfully.
+-bash-4.2# ^D
+Container mycontainer exited successfully.
+#
+\end{Verbatim}
+
+Мы использовали systemd-nspawn в <<режиме chroot>>, чтобы получить
+командную оболочку внутри контейнера (не~запуская гостевую систему целиком), и из этой
+оболочки задать пароль +root+. На этом предварительная настройка заканчивается.
+Теперь мы можем загрузить ОС внутри контейнера и войти в нее, используя заданный
+нами пароль:
+\begin{Verbatim}[fontsize=\small]
+$ systemd-nspawn -D /srv/mycontainer -b
+Spawning container mycontainer on /srv/mycontainer.
+Press ^] three times within 1s to kill container.
+systemd 208 running in system mode. (+PAM +LIBWRAP +AUDIT +SELINUX +IMA +SYSVINIT +LIBCRYPTSETUP +GCRYPT +ACL +XZ)
+Detected virtualization 'systemd-nspawn'.
+
+Welcome to Fedora 20 (Heisenbug)!
+
+[  OK  ] Reached target Remote File Systems.
+[  OK  ] Created slice Root Slice.
+[  OK  ] Created slice User and Session Slice.
+[  OK  ] Created slice System Slice.
+[  OK  ] Created slice system-getty.slice.
+[  OK  ] Reached target Slices.
+[  OK  ] Listening on Delayed Shutdown Socket.
+[  OK  ] Listening on /dev/initctl Compatibility Named Pipe.
+[  OK  ] Listening on Journal Socket.
+         Starting Journal Service...
+[  OK  ] Started Journal Service.
+[  OK  ] Reached target Paths.
+         Mounting Debug File System...
+         Mounting Configuration File System...
+         Mounting FUSE Control File System...
+         Starting Create static device nodes in /dev...
+         Mounting POSIX Message Queue File System...
+         Mounting Huge Pages File System...
+[  OK  ] Reached target Encrypted Volumes.
+[  OK  ] Reached target Swap.
+         Mounting Temporary Directory...
+         Starting Load/Save Random Seed...
+[  OK  ] Mounted Configuration File System.
+[  OK  ] Mounted FUSE Control File System.
+[  OK  ] Mounted Temporary Directory.
+[  OK  ] Mounted POSIX Message Queue File System.
+[  OK  ] Mounted Debug File System.
+[  OK  ] Mounted Huge Pages File System.
+[  OK  ] Started Load/Save Random Seed.
+[  OK  ] Started Create static device nodes in /dev.
+[  OK  ] Reached target Local File Systems (Pre).
+[  OK  ] Reached target Local File Systems.
+         Starting Trigger Flushing of Journal to Persistent Storage...
+         Starting Recreate Volatile Files and Directories...
+[  OK  ] Started Recreate Volatile Files and Directories.
+         Starting Update UTMP about System Reboot/Shutdown...
+[  OK  ] Started Trigger Flushing of Journal to Persistent Storage.
+[  OK  ] Started Update UTMP about System Reboot/Shutdown.
+[  OK  ] Reached target System Initialization.
+[  OK  ] Reached target Timers.
+[  OK  ] Listening on D-Bus System Message Bus Socket.
+[  OK  ] Reached target Sockets.
+[  OK  ] Reached target Basic System.
+         Starting Login Service...
+         Starting Permit User Sessions...
+         Starting D-Bus System Message Bus...
+[  OK  ] Started D-Bus System Message Bus.
+         Starting Cleanup of Temporary Directories...
+[  OK  ] Started Cleanup of Temporary Directories.
+[  OK  ] Started Permit User Sessions.
+         Starting Console Getty...
+[  OK  ] Started Console Getty.
+[  OK  ] Reached target Login Prompts.
+[  OK  ] Started Login Service.
+[  OK  ] Reached target Multi-User System.
+[  OK  ] Reached target Graphical Interface.
+
+Fedora release 20 (Heisenbug)
+Kernel 3.18.0-0.rc4.git0.1.fc22.x86_64 on an x86_64 (console)
+
+mycontainer login: root
+Password:
+-bash-4.2#
+\end{Verbatim}
+
+Наш испытательный стенд готов. Начнем рассмотрение механизмов интеграции systemd
+и контейнеров с утилиты machinectl. Запустив ее без параметров, мы получим
+список работающих в данный момент контейнеров:
+\begin{Verbatim}
+$ machinectl
+MACHINE                          CONTAINER SERVICE
+mycontainer                      container nspawn
+
+1 machines listed.
+\end{Verbatim}
+
+Команда +machinectl status+ позволяет получить детальную информацию о выбранном
+контейнере:
+\begin{Verbatim}[fontsize=\small]
+$ machinectl status mycontainer
+mycontainer:
+       Since: Mi 2014-11-12 16:47:19 CET; 51s ago
+      Leader: 5374 (systemd)
+     Service: nspawn; class container
+        Root: /srv/mycontainer
+     Address: 192.168.178.38
+              10.36.6.162
+              fd00::523f:56ff:fe00:4994
+              fe80::523f:56ff:fe00:4994
+          OS: Fedora 20 (Heisenbug)
+        Unit: machine-mycontainer.scope
+              ├─5374 /usr/lib/systemd/systemd
+              └─system.slice
+                ├─dbus.service
+                │ └─5414 /bin/dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-act...
+                ├─systemd-journald.service
+                │ └─5383 /usr/lib/systemd/systemd-journald
+                ├─systemd-logind.service
+                │ └─5411 /usr/lib/systemd/systemd-logind
+                └─console-getty.service
+                  └─5416 /sbin/agetty --noclear -s console 115200 38400 9600
+\end{Verbatim}
+В частности, она отображает дерево контрольных групп и процессов контейнера, его
+IP-адреса и корневой каталог.
+
+Команда +machinectl login+ позволяет войти внутрь работающего контейнера,
+запустив в нем еще одну командную оболочку:
+\begin{Verbatim}
+# machinectl login mycontainer
+Connected to container mycontainer. Press ^] three times within 1s to exit session.
+
+Fedora release 20 (Heisenbug)
+Kernel 3.18.0-0.rc4.git0.1.fc22.x86_64 on an x86_64 (pts/0)
+
+mycontainer login:
+\end{Verbatim}
+
+Команда +machinectl reboot+ перезагружает контейнер:
+\begin{Verbatim}
+# machinectl reboot mycontainer
+\end{Verbatim}
+
+Команда +machinectl poweroff+ выключает контейнер:
+\begin{Verbatim}
+# machinectl poweroff mycontainer
+\end{Verbatim}
+
+Пожалуй, этих минимальных сведений о machinectl должно быть достаточно. Стоит
+заметить, что ее функциональность не~ограничиваются приведенными здесь командами.
+За подробностями рекомендуем обратиться 
+к~\href{http://www.freedesktop.org/software/systemd/man/machinectl.html}{странице
+руководства}. Еще раз отметим, что данные команды применимы не~только к
+контейнерам на базе systemd-nspawn, но и к другим системам управления
+контейнерами, реализованным с учетом
+\href{http://www.freedesktop.org/wiki/Software/systemd/writing-vm-managers/}{наших
+рекомендаций}, в частности, libvirt-lxc.
+
+Помимо machinectl, в systemd существует и ряд других инструментов, упрощающих
+работу с контейнерами. В частности, большинство управляющих утилит systemd имеют
+встроенную поддержку контейнеров: при помощи ключа +-M+ вы можете указать имя
+нужного вам контейнера, и соответствующая утилита будет работать так, как будто
+запущена внутри этого контейнера\footnote{Прим. перев.: Поддержка данной опции
+добавлена в systemctl, journalctl, loginctl, machinectl, hostnamectl,
+timedatectl, localectl, busctl, systemd-analyze, systemd-run начиная с systemd
+209, в systemd-cgls~--- с systemd 203.}.  Например (не~забудьте снова запустить
+наш тестовый контейнер, если вы его до этого выключили):
+\begin{Verbatim}
+# hostnamectl -M mycontainer set-hostname "wuff"
+\end{Verbatim}
+Приведенная здесь команда
+\href{http://www.freedesktop.org/software/systemd/man/hostnamectl.html}{hostnamectl(1)}
+устанавливает в локальном контейнере +mycontainer+ имя хоста <<+wuff+>>.
+
+А вот пример использования того же ключа +-M+ в программе
+\href{http://www.freedesktop.org/software/systemd/man/systemctl.html}{systemctl(1)}:
+\begin{Verbatim}[fontsize=\small]
+# systemctl -M mycontainer
+UNIT                                 LOAD   ACTIVE SUB       DESCRIPTION
+-.mount                              loaded active mounted   /
+dev-hugepages.mount                  loaded active mounted   Huge Pages File System
+dev-mqueue.mount                     loaded active mounted   POSIX Message Queue File System
+proc-sys-kernel-random-boot_id.mount loaded active mounted   /proc/sys/kernel/random/boot_id
+[...]
+time-sync.target                     loaded active active    System Time Synchronized
+timers.target                        loaded active active    Timers
+systemd-tmpfiles-clean.timer         loaded active waiting   Daily Cleanup of Temporary Directories
+
+LOAD   = Reflects whether the unit definition was properly loaded.
+ACTIVE = The high-level unit activation state, i.e. generalization of SUB.
+SUB    = The low-level unit activation state, values depend on unit type.
+
+49 loaded units listed. Pass --all to see loaded but inactive units, too.
+To show all installed unit files use 'systemctl list-unit-files'.
+\end{Verbatim}
+Как нетрудно догадаться, эта команда выводит список активных юнитов гостевой
+системы контейнера. (Чтобы не~загромождать нашу статью лишним текстом, часть
+листинга пропущена.)
+
+Перезапустить службу внутри гостевой системы также не~представляет проблемы:
+\begin{Verbatim}
+# systemctl -M mycontainer restart systemd-resolved.service
+\end{Verbatim}
+
+Поддержка контейнеров в утилите +systemctl+ не~ограничивается ключом +-M+.
+Она имеет еще и ключ +-r+ (рекурсивный режим)\footnote{Прим. перев.:
+Поддержка этой опции при выводе списка юнитов появилась начиная с systemd~212,
+при выводе списков таймеров и сокетов (+systemctl list-timers+ и 
++systemctl list-sockets+)~--- начиная с systemd~213.}, позволяющий выводить
+объединенный список юнитов для хоста и всех работающих гостевых систем:
+\begin{Verbatim}[fontsize=\small]
+# systemctl -r
+UNIT                                        LOAD   ACTIVE SUB       DESCRIPTION
+boot.automount                              loaded active waiting   EFI System Partition Automount
+proc-sys-fs-binfmt_misc.automount           loaded active waiting   Arbitrary Executable File Formats File Syst
+sys-devices-pci0000:00-0000:00:02.0-drm-card0-card0\x2dLVDS\x2d1-intel_backlight.device loaded active plugged   /sys/devices/pci0000:00/0000:00:02.0/drm/ca
+[...]
+timers.target                               loaded active active    Timers
+mandb.timer                                 loaded active waiting   Daily man-db cache update
+systemd-tmpfiles-clean.timer                loaded active waiting   Daily Cleanup of Temporary Directories
+mycontainer:-.mount                         loaded active mounted   /
+mycontainer:dev-hugepages.mount             loaded active mounted   Huge Pages File System
+mycontainer:dev-mqueue.mount                loaded active mounted   POSIX Message Queue File System
+[...]
+mycontainer:time-sync.target                loaded active active    System Time Synchronized
+mycontainer:timers.target                   loaded active active    Timers
+mycontainer:systemd-tmpfiles-clean.timer    loaded active waiting   Daily Cleanup of Temporary Directories
+
+LOAD   = Reflects whether the unit definition was properly loaded.
+ACTIVE = The high-level unit activation state, i.e. generalization of SUB.
+SUB    = The low-level unit activation state, values depend on unit type.
+
+191 loaded units listed. Pass --all to see loaded but inactive units, too.
+To show all installed unit files use 'systemctl list-unit-files'.
+\end{Verbatim}
+
+Как видно из листинга, сначала выводится список юнитов хоста, после которого
+идет список юнитов нашего контейнера. Перед именами юнитов гостевой системы,
+через двоеточие, указывается имя контейнера. (По традиции, листинг сокращен.)
+
+Команда +systemctl list-machines+ опрашивает процессы init всех работающих
+контейнеров, и по результатам выводит список работающих систем 
+(хостовой и всех гостевых), с указанием их текущего состояния и наличия 
+ошибок загрузки.
+\begin{Verbatim}
+# systemctl list-machines
+NAME         STATE   FAILED JOBS
+delta (host) running      0    0
+mycontainer  running      0    0
+miau         degraded     1    0
+waldi        running      0    0
+
+4 machines listed.
+\end{Verbatim}
+
+Для большей наглядности мы запустили еще два контейнера. В одном из них
+произошла ошибка запуска юнита, поэтому его состояние характеризуется как
+<<+degraded+>>.
+
+А теперь обсудим поддержку контейнеров в утилите
+\href{http://www.freedesktop.org/software/systemd/man/journalctl.html}{journalctl(1)}.
+Во-первых, она позволяет использовать описанную выше опцию +-M+:
+\begin{Verbatim}[fontsize=\small]
+# journalctl -M mycontainer -n 8
+Nov 12 16:51:13 wuff systemd[1]: Starting Graphical Interface.
+Nov 12 16:51:13 wuff systemd[1]: Reached target Graphical Interface.
+Nov 12 16:51:13 wuff systemd[1]: Starting Update UTMP about System Runlevel Changes...
+Nov 12 16:51:13 wuff systemd[1]: Started Stop Read-Ahead Data Collection 10s After Completed Startup.
+Nov 12 16:51:13 wuff systemd[1]: Started Update UTMP about System Runlevel Changes.
+Nov 12 16:51:13 wuff systemd[1]: Startup finished in 399ms.
+Nov 12 16:51:13 wuff sshd[35]: Server listening on 0.0.0.0 port 24.
+Nov 12 16:51:13 wuff sshd[35]: Server listening on :: port 24.
+\end{Verbatim}
+
+Во-вторых, стоит упомянуть опцию +-m+ (режим слияния), выводящую объединенный
+поток журнальных записей хоста и всех его гостевых систем\footnote{Прим. перев.:
+Чтобы данная опция действительно работала именно так, необходимо, чтобы в
+каталоге +/var/log/journal+ хоста присутствовали символьные ссылки на каталоги с
+логами гостевых систем, либо было выполнено их bind-монтирование. См.
+примечание~\ref{ftn:jrnmerge}. Стоит заметить что, помимо логов контейнеров, в
+этом каталоге могут оказаться и логи других компьютеров, если у вас настроен их
+сбор с помощью
+\href{http://www.freedesktop.org/software/systemd/man/systemd-journal-remote.html}{systemd-journal-remote(8)}
+или иных инструментов.}.: 
+\begin{Verbatim}
+# journalctl -m -e
+\end{Verbatim}
+(Здесь вывод команды опущен полностью. Думаю, вам будет несложно представить
+себе, как он выглядит.)
+
+Поддержка контейнеров присутствует не~только в утилитах systemd, но и в
+программах из комплекта procps\footnote{Прим. перев.: Начиная с выпуска procps
+3.3.8.}:
+\begin{Verbatim}[fontsize=\small]
+# ps -eo pid,machine,args
+ PID MACHINE        COMMAND
+   1 -              /usr/lib/systemd/systemd --switched-root --system --deserialize 20
+[...]
+2915 -              emacs contents/projects/containers.md
+3403 -              [kworker/u16:7]
+3415 -              [kworker/u16:9]
+4501 -              /usr/libexec/nm-vpnc-service
+4519 -              /usr/sbin/vpnc --non-inter --no-detach --pid-file /var/run/NetworkManager/nm-vpnc-bfda8671-f025-4812-a66b-362eb12e7f13.pid -
+4749 -              /usr/libexec/dconf-service
+4980 -              /usr/lib/systemd/systemd-resolved
+5006 -              /usr/lib64/firefox/firefox
+5168 -              [kworker/u16:0]
+5192 -              [kworker/u16:4]
+5193 -              [kworker/u16:5]
+5497 -              [kworker/u16:1]
+5591 -              [kworker/u16:8]
+5711 -              sudo -s
+5715 -              /bin/bash
+5749 -              /home/lennart/projects/systemd/systemd-nspawn -D /srv/mycontainer -b
+5750 mycontainer    /usr/lib/systemd/systemd
+5799 mycontainer    /usr/lib/systemd/systemd-journald
+5862 mycontainer    /usr/lib/systemd/systemd-logind
+5863 mycontainer    /bin/dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation
+5868 mycontainer    /sbin/agetty --noclear --keep-baud console 115200 38400 9600 vt102
+5871 mycontainer    /usr/sbin/sshd -D
+6527 mycontainer    /usr/lib/systemd/systemd-resolved
+[...]
+\end{Verbatim}
+Здесь приводится (сокращенный) список процессов хоста и всех гостевых систем.
+Во втором столбце указывается имя контейнера (<<+-+>> соответствует системе
+хоста).
+
+Но наша работа по поддержке взаимодействия с контейнерами этим
+не~ограничивается. В частности, мы добавили такую поддержку в <<sd-bus>>~---
+разрабатываемую нами клиентскую библиотеку D-Bus/kdbus. Если вызов
++sd_bus_open_system()+ позволяет подключаться к шине вашей локальной системы, то
+\hreftt{http://www.freedesktop.org/software/systemd/man/sd_bus_open_system_container.html}{sd\_bus\_open\_system\_container()}
+открывает соединение к шине выбранного гостевого контейнера, обеспечивая прямой
+доступ к ее интерфейсам и методам.
+
+\hreftt{http://www.freedesktop.org/software/systemd/man/sd_pid_get_machine_name.html}{sd-login.h}
+и \href{http://www.freedesktop.org/wiki/Software/systemd/machined/}{D-Bus
+интерфейс демона machined} предоставляют API для реализации поддержки
+контейнеров в сторонних программах. В частности, они содержат функции для
+определения имени контейнера по PID процесса, получения списка работающих
+контейнеров и т.д.
+
+systemd-networkd также имеет встроенную поддержку контейнеров. Когда он
+запускается внутри контейнера, он автоматически задействует DHCP-клиент и
+выполняет настройку IPv4LL-адреса\footnote{Прим. перев.: Механизм IPv4LL
+предоставляет простой метод автоматической настройки сетевых адресов в пределах
+одного сегмента. Сетевому интерфейсу присваивается случайно выбранный незанятый
+IP-адрес из специально зарезервированного диапазона 162.254.0.0/16.} на
+виртуальном сетевом интерфейсе с именем +host0+ (имя и назначение этого
+интерфейса оговаривается в
+\href{http://www.freedesktop.org/wiki/Software/systemd/ContainerInterface/}{наших
+рекомендациях}, которые должны поддерживаться вашей системой управления
+контейнерами). Когда networkd работает на хост-системе, он
+предоставляет функции DHCP-сервера и настраивает IPv4LL-адреса на всех
+виртуальных интерфейсах с именами вида +ve-имя_контейнера+.
+
+И наконец, последний из рассматриваемых в этой статье аспектов интеграции
+systemd и контейнеров: взаимодействие с NSS. В составе свежих версий
+systemd\footnote{Прим.  перев.: Начиная с версии 216.} поставляется NSS-модуль
+nss-mymachines, позволяющий преобразовывать имена контейнеров в их IP-адреса
+при помощи вызовов
+\hreftt{http://man7.org/linux/man-pages/man3/gethostbyname.3.html}{gethostbyname()}
+и
+\hreftt{http://man7.org/linux/man-pages/man3/getaddrinfo.3.html}{getaddrinfo()}.
+Разумеется, это применимо лишь к контейнерам, которые имеют собственное сетевое
+пространство имен (netns), т.е. свой сетевой стек. Команда systemd-nspawn,
+приведенная выше, запускает контейнер в сетевом стеке хоста, поэтому, чтобы
+продемонстрировать работу обсуждаемых механизмов, нам придется перезапустить
+этот контейнер с отдельным сетевым стеком, в котором systemd-nspawn создаст
+виртуальный сетевой интерфейс (+veth+), связывающий контейнер с хостом:
+\begin{Verbatim}
+# machinectl poweroff mycontainer
+# systemd-nspawn -D /srv/mycontainer --network-veth -b
+\end{Verbatim}
+
+Теперь, если в контейнере и на хосте работает systemd-networkd, мы можем
+обращаться к контейнеру через сеть просто по его имени, которое при помощи
+модуля nss-mymachines будет автоматически преобразовано в его
+IP-адрес\footnote{Прим. перев.: Для корректной работы модуля nss-mymachines,
+он должен быть указан в конфигурационном файле +/etc/nsswitch.conf+, в строке
+hosts. В частности, в поставляемом с systemd варианте этого файла, данная
+строчка выглядит так: <<+hosts: files mymachines resolve myhostname+>>. Помимо
+mymachines, в ней фигурируют и другие NSS-модули systemd: resolve отвечает
+за взаимодействие с кэширующим DNS-сервером systemd-resolved, а myhostname
+обеспечивает корректное преобразование системного имени хоста в IP-адрес
+127.0.0.2, даже при отсутствии соответствующей записи в +/etc/hosts+.}:
+\begin{Verbatim}
+# ping mycontainer
+PING mycontainer (10.0.0.2) 56(84) bytes of data.
+64 bytes from mycontainer (10.0.0.2): icmp_seq=1 ttl=64 time=0.124 ms
+64 bytes from mycontainer (10.0.0.2): icmp_seq=2 ttl=64 time=0.078 ms
+\end{Verbatim}
+
+Разумеется, преобразование имен контейнеров в IP-адреса и обратно работает
+не~только для утилиты +ping+, но и для всех остальных программ, использующих
+функции libc +gethostbyname()+ и +getaddrinfo()+, в том числе и для нашей
+любимой и незаменимой +ssh+.
+
+Вот и все, о чем я хотел рассказать в данной статье. Мы кратко прошлись по
+основным моментам интеграции systemd и контейнеров. Изложение не~претендует на
+полноту, и очень многие детали оказались <<за бортом>>~--- о них вы можете
+узнать из документации. Кроме того, в настоящее время мы продолжаем работу над
+более тесной интеграцией с контейнерами, так что ожидайте новых возможностей в
+этой области с ближайшими выпусками systemd.
+
+В завершение стоит отметить, что концепция машины (machine) применима не~только
+к контейнерам, но и, в некоторой степени, к полноценным виртуальным машинами.
+Однако, в случае виртуальных машин, доступ к гостевым системам с хоста
+реализуется несколько сложнее, чем в контейнерах~--- вместо прямого доступа к
+системным вызовам, приходится использовать взаимодействие через
+сеть\footnote{Прим. перев.: Можно предположить, что здесь автор пытается
+намекнуть на опцию +-H [user@]host[:container]+, позволяющую обращаться к
+другим хостам и их контейнерам через сеть при помощи SSH-транспорта,
+реализованного в шине D-Bus. Эта опция поддерживается в большинстве управляющих
+утилит systemd (systemctl, loginctl, machinectl, hostnamectl, timedatectl,
+localectl, busctl, systemd-analyze, systemd-run).}.
+
+В любом случае, надеюсь, что статья для кого-то оказалась полезной. За
+подробностями обращайтесь к документации (начать изучение темы можно со ссылок,
+приведенных в этой статье).
 
 \appendix
 
@@ -4887,7 +5361,7 @@ systemd все работало!}
 Это длинная история. См. приложение~\ref{sec:networktarget}.
 
 \qna{systemd монтирует в \texttt{/tmp} \texttt{tmpfs}. Как это отключить?}
-Это тоже долгая история. См. приложения~\ref{sec:apifs}.
+Это тоже долгая история. См. приложение~\ref{sec:apifs}.
 
 \qna{Как просмотреть список работающих служб?}
 Запустите команду +systemctl+ без параметров\footnote{Прим. перев.: +systemctl+
@@ -5725,8 +6199,8 @@ File Systems}>> с официального сайта проекта, по со
 
 \yousaywtfsk{Итак, вы запустили программу mount(8), и увидели в ее выводе
 множество странных файловых систем, не~указанных в /etc/fstab. У вас могут
-возникнуть вопросы: <<Как их убрать?>> или <<Как задать для них параметры
-монтирования?>>.}
+возникнуть вопросы: <<Как от них избавиться?>> или <<Как задать для них
+параметры монтирования?>>.}
 
 В Linux предусмотрено несколько способов взаимодействия программ из пространства
 пользователя с ядром. Наиболее популярными механизмами являются системные вызовы
