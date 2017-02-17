@@ -6142,8 +6142,8 @@ ln -s /dev/null /etc/systemd/network/99-default.link
 {исходном коде net\_id built-in}. Ознакомьтесь с ним, если у вас возникают
 вопросы, касающиеся расшифровки новых имен\footnote{Прим. перев.: Далее
 приводится перевод упомянутого блока комментариев. Последним коммитом,
-затронувшим данный файл, на момент перевода является 8fb3f от 9 декабря
-2016 г.}.
+затронувшим данный файл, на момент перевода является ecc11 от 17 февраля
+2017 г.}.
 
 \begin{Verbatim}
 Предсказуемые имена сетевых интерфейсов формируются на основании:
@@ -6163,8 +6163,10 @@ http://www.freedesktop.org/wiki/Software/systemd/PredictableNetworkInterfaceName
 Последующие символы определяеются используемой схемой:
   b<number> -- для устройств, подключенных по шине BCMA (<number> соответствует
       BCMA bus core number)
-  c<bus_id> -- для устройств, адресуемых по шине CCW, имя группы (CCW bus
-      group name) <bus_id> указывается без ведущих нулей [s390]
+  c<bus_id> -- для устройств, адресуемых через Channel Command Words (CCW). 
+      <bus_id> соответствует CCW bus-ID для простого (использующего один
+      субканал) или группированного (использующего несколько субканалов) 
+      устройства, указывается без ведущих нулей [s390]
   o<index>[n<phys_port_name>|d<dev_port>] -- для устройств, встроенных 
       в материнскую плату
   s<slot>[f<function>][n<phys_port_name>|d<dev_port>] -- для hotplug-слотов
@@ -6221,6 +6223,11 @@ Multi-function PCI устройство с двумя портами:
   /sys/devices/pci0000:00/0000:00:1d.0/usb2/2-1/2-1.2/2-1.2:1.0/net/enp0s29u1u2
   ID_NET_NAME_MAC=enxd626b3450fb5
   ID_NET_NAME_PATH=enp0s29u1u2
+
+Группированный CCW-интерфейс на s390:
+  /sys/devices/css0/0.0.0007/0.0.f5f0/group_device/net/encf5f0
+  ID_NET_NAME_MAC=enx026d3c00000a
+  ID_NET_NAME_PATH=encf5f0
 \end{Verbatim}
 
 \section{Специальные файловые системы\sfnote{Перевод статьи
